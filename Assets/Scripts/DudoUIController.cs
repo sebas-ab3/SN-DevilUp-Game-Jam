@@ -1,357 +1,431 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
-using DudoExact;
-using System.Linq;
+using DudoGame;
+using System.Collections;
 
-public class DudoExactUIController : MonoBehaviour
+public class DudoUIController : MonoBehaviour
 {
     [Header("Top Info")]
-    [SerializeField] TMP_Text playerDiceLabel;
-    [SerializeField] TMP_Text aiDiceCountLabel;
-    [SerializeField] TMP_Text currentBidLabel;
-    [SerializeField] TMP_Text statusLabel;
+    [SerializeField] private TMP_Text playerDiceLabel;
+    [SerializeField] private TMP_Text aiDiceCountLabel;
+    [SerializeField] private TMP_Text currentBidLabel;
+
+    [Header("Status")]
+    [SerializeField] private TMP_Text statusLabel;
 
     [Header("Bid Editor")]
-    [SerializeField] TMP_Text qtyValue;
-    [SerializeField] TMP_Text faceValue;
-    [SerializeField] Button qtyMinus;
-    [SerializeField] Button qtyPlus;
-    [SerializeField] Button faceMinus;
-    [SerializeField] Button facePlus;
+    [SerializeField] private TMP_Text qtyValue;
+    [SerializeField] private TMP_Text faceValue;
+    [SerializeField] private Button qtyMinus;
+    [SerializeField] private Button qtyPlus;
+    [SerializeField] private Button faceMinus;
+    [SerializeField] private Button facePlus;
+    [SerializeField] private GameObject bidEditorRow;
 
     [Header("Actions")]
-    [SerializeField] Button btnPlaceBid;
-    [SerializeField] Button btnCall;    // "Dudo"
-    [SerializeField] Button btnSpotOn;  // "Spot On"
+    [SerializeField] private Button placeBidBtn;
+    [SerializeField] private Button callBtn;
+    [SerializeField] private Button spotOnBtn;
+    [SerializeField] private GameObject actionsRow;
 
-    private Match match;
-    private int bidQty = 1;
-    private int bidFace = 2;
+    [Header("Game Setup")]
+    [SerializeField] private string playerName = "You";
+    [SerializeField] private int startingDice = 5;
 
-    private void Awake()
+    private DudoGameManager _gameManager;
+    private int _bidQty = 1;
+    private int _bidFace = 2;
+    private bool _waitingForAI = false;
+    private bool _gameOver = false;
+    private string _errorMessage = "";
+
+    private void Start()
     {
-        match = new Match(startingDice: 5);
-        WireButtons();
-        RefreshAll("New round. " + (match.turnIndex == 0 ? "You start." : "AI starts."));
-        if (match.turnIndex == 1) AITurnIfNeeded();
-        PrepareDefaultBidEditor();
+        SetupUI();
+        StartNewGame();
     }
 
-    void WireButtons()
+    private void Update()
     {
-        qtyMinus.onClick.AddListener(() => { bidQty = Mathf.Max(1, bidQty - 1); UpdateBidEditorClamped(); });
-        qtyPlus.onClick.AddListener(() => { bidQty = Mathf.Min(30, bidQty + 1); UpdateBidEditorClamped(); });
-        faceMinus.onClick.AddListener(() => { bidFace = Mathf.Max(1, bidFace - 1); UpdateBidEditorClamped(); });
-        facePlus.onClick.AddListener(() => { bidFace = Mathf.Min(6, bidFace + 1); UpdateBidEditorClamped(); });
-
-        btnPlaceBid.onClick.AddListener(OnPlaceBid);
-        btnCall.onClick.AddListener(OnCall);
-        btnSpotOn.onClick.AddListener(OnSpotOn);
-    }
-
-    void RefreshAll(string status)
-    {
-        playerDiceLabel.text  = $"Your dice: {string.Join(" ", match.playerDice)}";
-        aiDiceCountLabel.text = $"AI dice: {match.aiDice.Count}";
-        currentBidLabel.text  = match.currentBid.IsValid ? $"Current bid: {match.currentBid.quantity} × {match.currentBid.face}" : "Current bid: —";
-        statusLabel.text      = status;
-
-        // Interactions
-        bool myTurn = match.turnIndex == 0;
-        btnPlaceBid.interactable = myTurn;
-        btnCall.interactable     = myTurn && match.currentBid.IsValid; // can only call on an existing bid
-        btnSpotOn.interactable   = myTurn && match.currentBid.IsValid; // allowed on an existing bid
-
-        // You cannot open with aces
-        if (!match.currentBid.IsValid && bidFace == Rules.WILD)
-            bidFace = 2;
-
-        UpdateBidEditorClamped();
-    }
-
-    void PrepareDefaultBidEditor()
-    {
-        int pool = match.playerDice.Count + match.aiDice.Count;
-        bidQty  = Mathf.Max(1, Mathf.RoundToInt(pool * (2f / 6f)));
-        bidFace = 2;
-        UpdateBidEditorClamped();
-    }
-
-    void UpdateBidEditorClamped()
-    {
-        // Enforce legality relative to current bid:
-        var proposed = new Bid(bidQty, bidFace);
-
-        if (!match.currentBid.IsValid)
+        // Check for Enter key to restart game when game is over
+        if (_gameOver && Input.GetKeyDown(KeyCode.Return))
         {
-            // first bid cannot be aces
-            if (proposed.face == Rules.WILD) proposed.face = 2;
+            StartNewGame();
+        }
+    }
+
+    private void SetupUI()
+    {
+        // Wire up bid editor buttons
+        qtyMinus.onClick.AddListener(() => { 
+            _bidQty = Mathf.Max(1, _bidQty - 1); 
+            UpdateBidEditor(); 
+        });
+        qtyPlus.onClick.AddListener(() => { 
+            _bidQty = Mathf.Min(10, _bidQty + 1); 
+            UpdateBidEditor(); 
+        });
+        faceMinus.onClick.AddListener(() => { 
+            _bidFace = Mathf.Max(1, _bidFace - 1); 
+            UpdateBidEditor(); 
+        });
+        facePlus.onClick.AddListener(() => { 
+            _bidFace = Mathf.Min(6, _bidFace + 1); 
+            UpdateBidEditor(); 
+        });
+
+        // Wire up action buttons
+        placeBidBtn.onClick.AddListener(OnPlaceBid);
+        callBtn.onClick.AddListener(OnCall);
+        spotOnBtn.onClick.AddListener(OnSpotOn);
+
+        // Set button labels
+        callBtn.GetComponentInChildren<TMP_Text>().text = "Dudo";
+        spotOnBtn.GetComponentInChildren<TMP_Text>().text = "Spot On";
+    }
+
+    private void StartNewGame()
+    {
+        _gameManager = new DudoGameManager(playerName, startingDice);
+        _gameManager.StartNewRound();
+        _errorMessage = "";
+        _gameOver = false;
+        
+        // Set initial bid editor values
+        _bidQty = 1;
+        _bidFace = 2;
+        UpdateBidEditor();
+        
+        RefreshUI("New round. " + (_gameManager.currentPlayerIndex == 0 ? "Your turn." : "AI's turn."));
+
+        if (_gameManager.players[_gameManager.currentPlayerIndex].isAI)
+        {
+            StartCoroutine(AITurn());
+        }
+    }
+
+    private void RefreshUI(string status)
+    {
+        // Update top info
+        Player player = _gameManager.players[0];
+        Player ai = _gameManager.players[1];
+
+        playerDiceLabel.text = $"Your dice: {FormatDice(player.dice, false)}";
+        
+        // Show AI dice as question marks during active rounds, reveal after
+        aiDiceCountLabel.text = _gameManager.roundActive ? 
+            $"AI dice: {FormatDice(ai.dice, true)}" : 
+            $"AI dice: {FormatDice(ai.dice, false)}";
+
+        if (_gameManager.currentBid != null)
+        {
+            currentBidLabel.text = $"Current bid: {_gameManager.currentBid}";
         }
         else
         {
-            // If illegal, bump toward minimal legal raise.
-            if (!Rules.IsLegalRaise(match.currentBid, proposed))
-                proposed = BumpToMinimalLegal(match.currentBid, proposed);
+            currentBidLabel.text = "Current bid: —";
         }
 
-        bidQty = proposed.quantity;
-        bidFace = proposed.face;
+        // Update status (include error message if present)
+        statusLabel.text = _errorMessage != "" ? $"<color=red>{_errorMessage}</color>\n\n{status}" : status;
 
-        qtyValue.text = bidQty.ToString();
-        faceValue.text = bidFace.ToString();
+        // Update button interactability
+        bool isPlayerTurn = _gameManager.currentPlayerIndex == 0 && !_waitingForAI && _gameManager.roundActive;
+        bool hasBid = _gameManager.currentBid != null;
+
+        placeBidBtn.interactable = isPlayerTurn;
+        callBtn.interactable = isPlayerTurn && hasBid;
+        spotOnBtn.interactable = isPlayerTurn && hasBid;
+
+        qtyMinus.interactable = isPlayerTurn;
+        qtyPlus.interactable = isPlayerTurn;
+        faceMinus.interactable = isPlayerTurn;
+        facePlus.interactable = isPlayerTurn;
+
+        // Show/hide panels based on game state
+        bool shouldShowControls = isPlayerTurn || (!_gameManager.roundActive && _gameManager.currentPlayerIndex == 0);
+        bidEditorRow.SetActive(shouldShowControls);
+        actionsRow.SetActive(shouldShowControls);
+
+        UpdateBidEditor();
     }
 
-    Bid BumpToMinimalLegal(Bid curr, Bid proposed)
+    private void UpdateBidEditor()
     {
-        // Try normal minimal steps respecting the exact mapping rules.
-        // 1) If curr non-ace: try same qty higher face; else +1 qty face=2; else special jump to aces exactly.
-        bool currA = curr.face == Rules.WILD;
-        if (!curr.IsValid)
+        // Clamp to valid ranges
+        _bidQty = Mathf.Clamp(_bidQty, 1, 10);
+        _bidFace = Mathf.Clamp(_bidFace, 1, 6);
+        
+        // First bid cannot be aces
+        if (_gameManager.currentBid == null)
         {
-            if (proposed.face == Rules.WILD) return new Bid(Mathf.Max(1, proposed.quantity), 2);
-            return proposed;
-        }
-
-        if (!currA)
-        {
-            // If the user picked aces, force EXACT ceil(q/2)
-            if (proposed.face == Rules.WILD)
-                return new Bid((curr.quantity + 1) / 2, Rules.WILD);
-
-            // else non-ace: ensure strictly higher
-            if (proposed.quantity > curr.quantity) return new Bid(proposed.quantity, Mathf.Clamp(proposed.face, 2, 6));
-            if (proposed.quantity == curr.quantity && proposed.face > curr.face) return new Bid(proposed.quantity, proposed.face);
-
-            // Minimal legal non-ace raise:
-            if (curr.face < 6) return new Bid(curr.quantity, curr.face + 1);
-            return new Bid(curr.quantity + 1, 2);
+            if (_bidFace == 1) _bidFace = 2;
         }
         else
         {
-            // curr is aces
-            if (proposed.face == Rules.WILD)
+            // Check if current selection is valid
+            Bid proposed = new Bid(_bidQty, _bidFace);
+            var validation = DudoRules.IsValidBid(_gameManager.currentBid, proposed);
+            
+            // Only auto-correct if the bid is actually illegal
+            // This allows free movement as long as it stays legal
+            if (!validation.valid)
             {
-                if (proposed.quantity > curr.quantity) return new Bid(proposed.quantity, Rules.WILD);
-                return new Bid(curr.quantity + 1, Rules.WILD);
+                // Try to salvage the bid by adjusting minimally
+                proposed = AdjustToLegalBid(_gameManager.currentBid, _bidQty, _bidFace);
+                _bidQty = proposed.quantity;
+                _bidFace = proposed.value;
             }
+        }
+
+        qtyValue.text = _bidQty.ToString();
+        faceValue.text = _bidFace == 1 ? "A" : _bidFace.ToString();
+    }
+
+    private Bid AdjustToLegalBid(Bid current, int attemptedQty, int attemptedFace)
+    {
+        // If user is trying to go lower than current bid with same/lower face, bump the face up
+        if (attemptedQty <= current.quantity && attemptedFace <= current.value && 
+            current.value != 1 && attemptedFace != 1)
+        {
+            // Same quantity - must increase face
+            if (attemptedQty == current.quantity)
+            {
+                return new Bid(current.quantity, Mathf.Min(6, current.value + 1));
+            }
+            // Lower quantity - must increase quantity to minimum legal
             else
             {
-                // non-ace jump must be EXACT 2*q+1
-                int need = 2 * curr.quantity + 1;
-                return new Bid(need, Mathf.Clamp(proposed.face, 2, 6));
+                return new Bid(current.quantity, Mathf.Min(6, current.value + 1));
             }
         }
+
+        // For ace conversions, use the minimal legal bid
+        return GetMinimalLegalBid(current);
     }
 
-    void OnPlaceBid()
+    private Bid GetMinimalLegalBid(Bid current)
     {
-        var proposed = new Bid(bidQty, bidFace);
-        if ((!match.currentBid.IsValid && !Rules.IsFirstBidValid(proposed)) ||
-            (match.currentBid.IsValid && !Rules.IsLegalRaise(match.currentBid, proposed)))
+        if (current == null) return new Bid(1, 2);
+
+        // Try increasing quantity first
+        Bid test = new Bid(current.quantity + 1, current.value);
+        if (DudoRules.IsValidBid(current, test).valid)
+            return test;
+
+        // Try increasing face value
+        if (current.value < 6)
         {
-            RefreshAll("Illegal bid per Dudo rules.");
+            test = new Bid(current.quantity, current.value + 1);
+            if (DudoRules.IsValidBid(current, test).valid)
+                return test;
+        }
+
+        // Try converting to aces
+        if (current.value != 1)
+        {
+            int aceQty = Mathf.CeilToInt(current.quantity / 2f);
+            test = new Bid(aceQty, 1);
+            if (DudoRules.IsValidBid(current, test).valid)
+                return test;
+        }
+
+        // Try converting from aces
+        if (current.value == 1)
+        {
+            test = new Bid(current.quantity * 2 + 1, 2);
+            if (DudoRules.IsValidBid(current, test).valid)
+                return test;
+        }
+
+        // Fallback
+        return new Bid(current.quantity + 1, 2);
+    }
+
+    private void OnPlaceBid()
+    {
+        _errorMessage = "";
+        Bid proposed = new Bid(_bidQty, _bidFace);
+        var validation = DudoRules.IsValidBid(_gameManager.currentBid, proposed);
+
+        if (!validation.valid)
+        {
+            _errorMessage = $"INVALID BID: {validation.reason}";
+            RefreshUI(statusLabel.text.Split('\n')[statusLabel.text.Split('\n').Length - 1]);
             return;
         }
 
-        match.currentBid = proposed;
-        match.lastBidderIndex = 0; // me
-        match.turnIndex = 1;       // AI
-        RefreshAll($"You bid {proposed.quantity} × {proposed.face}.");
-        AITurnIfNeeded();
-    }
+        _gameManager.MakeBid(_bidQty, _bidFace);
+        RefreshUI($"You bid {proposed}. AI's turn.");
 
-    void OnCall()
-    {
-        if (!match.currentBid.IsValid) { RefreshAll("No bid to call."); return; }
-
-        // Player calls (challenges AI if AI was last bidder; or challenges last bidder in general)
-        int challenger = 0;
-        int bidder = match.lastBidderIndex;
-
-        var (loserIdxScratch, msg) = Rules.ResolveCall(match.currentBid, match.playerDice, match.aiDice);
-        // Decide loser: if bid was true → challenger loses; else bidder loses.
-        var pool = match.playerDice.Concat(match.aiDice).ToList();
-        int matchCnt = Rules.CountMatching(pool, match.currentBid);
-        bool bidTrue = matchCnt >= match.currentBid.quantity;
-        int loser = bidTrue ? challenger : bidder;
-
-        match.RemoveDie(loser);
-        string post = msg + $"\n{(loser==0?"You":"AI")} loses a die.";
-
-        // Next round: loser starts
-        if (!match.IsOver)
+        if (_gameManager.players[_gameManager.currentPlayerIndex].isAI)
         {
-            match.RollAll();
-            match.turnIndex = loser;
-            RefreshAll(post + $"\nNew round. {(match.turnIndex==0?"You start.":"AI starts.")}");
-            if (match.turnIndex == 1) AITurnIfNeeded();
-        }
-        else
-        {
-            RefreshAll(post + "\n" + (match.playerDice.Count==0?"You lost the game.":"You won the game!"));
-            DisableAll();
+            StartCoroutine(AITurn());
         }
     }
 
-    void OnSpotOn()
+    private void OnCall()
     {
-        if (!match.currentBid.IsValid) { RefreshAll("No bid to call spot-on."); return; }
-
-        // Player says spot-on on last bidder's declaration
-        var (exact, msg) = Rules.ResolveSpotOn(match.currentBid, match.playerDice, match.aiDice);
-        string post = msg;
-
-        if (exact)
+        _errorMessage = "";
+        if (_gameManager.currentBid == null)
         {
-            // Round canceled; declarer starts next
-            int declarer = match.lastBidderIndex;
-            match.RollAll();
-            match.turnIndex = declarer;
-            RefreshAll(post + $"\nNew round. {(match.turnIndex==0?"You start.":"AI starts.")}");
-            if (match.turnIndex == 1) AITurnIfNeeded();
+            _errorMessage = "INVALID: No bid to call.";
+            RefreshUI(statusLabel.text);
+            return;
         }
-        else
+
+        _gameManager.CallBid();
+        
+        // Build status from game log
+        string status = string.Join("\n", _gameManager.gameLog.GetRange(0, Mathf.Min(3, _gameManager.gameLog.Count)));
+        RefreshUI(status);
+
+        CheckGameOver();
+
+        if (!_gameManager.IsGameOver() && !_gameManager.roundActive)
         {
-            // Spot-on caller (me) loses a die; caller starts next
-            match.RemoveDie(0);
-            if (!match.IsOver)
-            {
-                match.RollAll();
-                match.turnIndex = 0;
-                RefreshAll(post + "\nYou lose a die.\nNew round. You start.");
-            }
-            else
-            {
-                RefreshAll(post + "\nYou lose a die.\nYou lost the game.");
-                DisableAll();
-            }
+            StartCoroutine(StartNextRound());
         }
     }
 
-    void AITurnIfNeeded()
+    private void OnSpotOn()
     {
-        if (match.IsOver || match.turnIndex != 1) return;
+        _errorMessage = "";
+        if (_gameManager.currentBid == null)
+        {
+            _errorMessage = "INVALID: No bid to call spot-on.";
+            RefreshUI(statusLabel.text);
+            return;
+        }
 
-        var (action, next) = SimpleAI.Decide(match);
+        _gameManager.SpotOn();
+        
+        // Build status from game log
+        string status = string.Join("\n", _gameManager.gameLog.GetRange(0, Mathf.Min(3, _gameManager.gameLog.Count)));
+        RefreshUI(status);
+
+        CheckGameOver();
+
+        if (!_gameManager.IsGameOver() && !_gameManager.roundActive)
+        {
+            StartCoroutine(StartNextRound());
+        }
+    }
+
+    private IEnumerator AITurn()
+    {
+        _waitingForAI = true;
+        RefreshUI("AI is thinking...");
+
+        yield return new WaitForSeconds(1.5f);
+
+        var (action, bid) = _gameManager.GetAIDecision();
+
         if (action == "raise")
         {
-            // Ensure legality
-            if (!Rules.IsLegalRaise(match.currentBid, next))
-            {
-                // fall back to minimal legal
-                next = ForceMinimalLegal(match.currentBid);
-            }
-            match.currentBid = next;
-            match.lastBidderIndex = 1;
-            match.turnIndex = 0;
-            RefreshAll($"AI bids {next.quantity} × {next.face}. Your turn.");
-            // Suggest editor near minimal legal above AI’s bid
-            SuggestFromCurrent();
+            _gameManager.MakeBid(bid.quantity, bid.value);
+            _waitingForAI = false;
+            RefreshUI($"AI bids {bid}. Your turn.");
         }
         else if (action == "call")
         {
-            // AI calls on the player's last bid
-            int challenger = 1;
-            int bidder = match.lastBidderIndex;
+            _gameManager.CallBid();
+            _waitingForAI = false;
+            string status = string.Join("\n", _gameManager.gameLog.GetRange(0, Mathf.Min(3, _gameManager.gameLog.Count)));
+            RefreshUI(status);
+            
+            CheckGameOver();
 
-            var (loserIdxScratch, msg) = Rules.ResolveCall(match.currentBid, match.playerDice, match.aiDice);
-            var pool = match.playerDice.Concat(match.aiDice).ToList();
-            int matchCnt = Rules.CountMatching(pool, match.currentBid);
-            bool bidTrue = matchCnt >= match.currentBid.quantity;
-            int loser = bidTrue ? challenger : bidder;
-
-            match.RemoveDie(loser);
-            string post = msg + $"\n{(loser==0?"You":"AI")} loses a die.";
-
-            if (!match.IsOver)
+            if (!_gameManager.IsGameOver() && !_gameManager.roundActive)
             {
-                match.RollAll();
-                match.turnIndex = loser; // loser starts
-                RefreshAll(post + $"\nNew round. {(match.turnIndex==0?"You start.":"AI starts.")}");
-                if (match.turnIndex == 1) AITurnIfNeeded();
+                StartCoroutine(StartNextRound());
+            }
+        }
+        else if (action == "spoton")
+        {
+            _gameManager.SpotOn();
+            _waitingForAI = false;
+            string status = string.Join("\n", _gameManager.gameLog.GetRange(0, Mathf.Min(3, _gameManager.gameLog.Count)));
+            RefreshUI(status);
+            
+            CheckGameOver();
+
+            if (!_gameManager.IsGameOver() && !_gameManager.roundActive)
+            {
+                StartCoroutine(StartNextRound());
+            }
+        }
+    }
+
+    private IEnumerator StartNextRound()
+    {
+        yield return new WaitForSeconds(4f);
+        
+        _errorMessage = "";
+        _gameManager.StartNewRound();
+        
+        // Reset bid editor to reasonable defaults
+        _bidQty = 1;
+        _bidFace = 2;
+        UpdateBidEditor();
+        
+        RefreshUI("New round. " + (_gameManager.currentPlayerIndex == 0 ? "Your turn." : "AI's turn."));
+
+        if (_gameManager.players[_gameManager.currentPlayerIndex].isAI)
+        {
+            StartCoroutine(AITurn());
+        }
+    }
+
+    private void CheckGameOver()
+    {
+        if (_gameManager.IsGameOver())
+        {
+            _gameOver = true;
+            Player winner = _gameManager.GetWinner();
+            Player loser = winner == _gameManager.players[0] ? _gameManager.players[1] : _gameManager.players[0];
+            
+            string finalStatus = $"{loser.playerName} has lost all dice!\n\n";
+            finalStatus += $"🏆 {winner.playerName} WINS! 🏆\n\n";
+            finalStatus += "Press ENTER to play again";
+            
+            RefreshUI(finalStatus);
+            
+            // Disable all buttons
+            placeBidBtn.interactable = false;
+            callBtn.interactable = false;
+            spotOnBtn.interactable = false;
+            qtyMinus.interactable = false;
+            qtyPlus.interactable = false;
+            faceMinus.interactable = false;
+            facePlus.interactable = false;
+        }
+    }
+
+    private string FormatDice(System.Collections.Generic.List<int> dice, bool hidden)
+    {
+        if (dice.Count == 0) return "—";
+        
+        string result = "";
+        for (int i = 0; i < dice.Count; i++)
+        {
+            if (hidden)
+            {
+                result += "?";
             }
             else
             {
-                RefreshAll(post + "\n" + (match.playerDice.Count==0?"You lost the game.":"You won the game!"));
-                DisableAll();
+                result += dice[i] == 1 ? "A" : dice[i].ToString();
             }
+            if (i < dice.Count - 1) result += " ";
         }
-        else // spot-on by AI
-        {
-            var (exact, msg) = Rules.ResolveSpotOn(match.currentBid, match.playerDice, match.aiDice);
-            string post = msg;
-
-            if (exact)
-            {
-                int declarer = match.lastBidderIndex;
-                match.RollAll();
-                match.turnIndex = declarer; // declarer starts
-                RefreshAll(post + $"\nNew round. {(match.turnIndex==0?"You start.":"AI starts.")}");
-                if (match.turnIndex == 1) AITurnIfNeeded();
-            }
-            else
-            {
-                // AI (caller) loses a die; AI starts next
-                match.RemoveDie(1);
-                if (!match.IsOver)
-                {
-                    match.RollAll();
-                    match.turnIndex = 1;
-                    RefreshAll(post + "\nAI loses a die.\nNew round. AI starts.");
-                    AITurnIfNeeded();
-                }
-                else
-                {
-                    RefreshAll(post + "\nAI loses a die.\nYou won the game!");
-                    DisableAll();
-                }
-            }
-        }
+        return result;
     }
 
-    Bid ForceMinimalLegal(Bid curr)
+    // Public method to restart game (call this from another script or button)
+    public void RestartGame()
     {
-        if (!curr.IsValid) return new Bid(1, 2);
-        bool currA = curr.face == Rules.WILD;
-        if (!currA)
-        {
-            if (curr.face < 6) return new Bid(curr.quantity, curr.face + 1);
-            return new Bid(curr.quantity + 1, 2);
-        }
-        else
-        {
-            return new Bid(curr.quantity + 1, Rules.WILD); // prefer aces+1
-        }
-    }
-
-    void SuggestFromCurrent()
-    {
-        if (!match.currentBid.IsValid)
-        {
-            PrepareDefaultBidEditor();
-            return;
-        }
-
-        var c = match.currentBid;
-        // Suggest the minimal legal above current
-        if (c.face != Rules.WILD)
-        {
-            if (c.face < 6) { bidQty = c.quantity; bidFace = c.face + 1; }
-            else { bidQty = c.quantity + 1; bidFace = 2; }
-        }
-        else
-        {
-            bidQty = c.quantity + 1; bidFace = Rules.WILD;
-        }
-        UpdateBidEditorClamped();
-    }
-
-    void DisableAll()
-    {
-        btnPlaceBid.interactable = false;
-        btnCall.interactable = false;
-        btnSpotOn.interactable = false;
-        qtyMinus.interactable = qtyPlus.interactable = faceMinus.interactable = facePlus.interactable = false;
+        StartNewGame();
     }
 }
