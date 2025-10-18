@@ -179,6 +179,7 @@ namespace DudoGame
         public int lastBidderIndex;
         public bool roundActive;
         public List<string> gameLog;
+        private EnemyProfile _enemy;
 
         public DudoGameManager(string playerName, int startingDice = 5)
         {
@@ -190,6 +191,11 @@ namespace DudoGame
             gameLog = new List<string>();
             currentPlayerIndex = 0;
             roundActive = false;
+        }
+        
+        public void SetEnemyProfile(EnemyProfile profile)
+        {
+            _enemy = profile;
         }
 
         public void StartNewRound()
@@ -287,85 +293,96 @@ namespace DudoGame
         }
 
         // AI Decision Making
-        public (string action, Bid bid) GetAIDecision()
+        // AI Decision Making
+public (string action, Bid bid) GetAIDecision()
+{
+    int maxDice = GetTotalDiceInPlay();
+
+    if (currentBid != null && currentBid.quantity >= maxDice && currentBid.value >= 6)
+        return ("call", null);
+
+    float callBase  = (_enemy != null) ? _enemy.callDudoBase  : 0.15f;
+    float spotBase  = (_enemy != null) ? _enemy.spotOnBase    : 0.10f;
+    float raiseBias = (_enemy != null) ? _enemy.raiseQuantityBias : 0.60f;
+    float aggr      = (_enemy != null) ? _enemy.aggression    : 0.50f;
+
+    if (currentBid == null)
+    {
+        int q = Mathf.Clamp(UnityEngine.Random.Range(1, 4), 1, Mathf.Max(1, maxDice));
+        int v = UnityEngine.Random.Range(2, 7);
+        return ("raise", new Bid(q, v));
+    }
+
+    float r = UnityEngine.Random.value;
+    if (r < callBase) return ("call", null);
+    if (r < callBase + spotBase) return ("spoton", null);
+
+    Bid candidate = GenerateAIBidWithBias(maxDice, raiseBias, aggr);
+    if (candidate != null) return ("raise", candidate);
+
+    return ("call", null);
+}
+
+private Bid GenerateAIBidWithBias(int maxDice, float raiseQuantityBias, float aggression)
+{
+    if (currentBid == null)
+        return new Bid(
+            Mathf.Clamp(UnityEngine.Random.Range(1, 4), 1, Mathf.Max(1, maxDice)),
+            UnityEngine.Random.Range(2, 7)
+        );
+
+    if (currentBid.quantity >= maxDice)
+    {
+        if (currentBid.value < 6)
         {
-            int maxDice = GetTotalDiceInPlay();
-            float decision = UnityEngine.Random.value;
-
-            // If we are already at (qty == maxDice, face == 6), AI must call to avoid infinite loop
-            if (currentBid != null && currentBid.quantity >= maxDice && currentBid.value >= 6)
-                return ("call", null);
-
-            if (currentBid == null)
-            {
-                // initial bid (non-aces), cap quantity to maxDice
-                int quantity = Mathf.Clamp(UnityEngine.Random.Range(1, 4), 1, Mathf.Max(1, maxDice));
-                int value = UnityEngine.Random.Range(2, 7);
-                return ("raise", new Bid(quantity, value));
-            }
-
-            // Small chance to call or spot on
-            if (decision < 0.15f)      return ("call", null);
-            else if (decision < 0.25f) return ("spoton", null);
-
-            // Try to raise, respecting maxDice and the "must raise face when qty==maxDice" rule
-            Bid newBid = GenerateAIBid(maxDice);
-            if (newBid != null) return ("raise", newBid);
-
-            // If can't raise, call instead
-            return ("call", null);
+            var b = new Bid(currentBid.quantity, currentBid.value + 1);
+            var v = DudoRules.IsValidBid(currentBid, b, maxDice);
+            return v.valid ? b : null;
         }
+        return null;
+    }
 
-        private Bid GenerateAIBid(int maxDice)
-        {
-            if (currentBid == null)
-                return new Bid(Mathf.Clamp(UnityEngine.Random.Range(1, 4), 1, Mathf.Max(1, maxDice)),
-                               UnityEngine.Random.Range(2, 7));
+    Bid qtyRaise = null;
+    Bid faceRaise = null;
 
-            var possible = new List<Bid>();
+    if (currentBid.quantity + 1 <= maxDice)
+        qtyRaise = new Bid(currentBid.quantity + 1, currentBid.value);
 
-            // If quantity already at maxDice: only face+1 (same qty) is legal
-            if (currentBid.quantity >= maxDice)
-            {
-                if (currentBid.value < 6)
-                    possible.Add(new Bid(currentBid.quantity, currentBid.value + 1));
-            }
-            else
-            {
-                // Increase quantity (same face) if it won't exceed maxDice
-                if (currentBid.quantity + 1 <= maxDice)
-                    possible.Add(new Bid(currentBid.quantity + 1, currentBid.value));
+    if (currentBid.value < 6)
+        faceRaise = new Bid(currentBid.quantity, currentBid.value + 1);
 
-                // Increase face (same qty)
-                if (currentBid.value < 6)
-                    possible.Add(new Bid(currentBid.quantity, currentBid.value + 1));
+    Bid toAces = null;
+    if (currentBid.value != 1)
+    {
+        int aceQty = Mathf.CeilToInt(currentBid.quantity / 2f) + 1;
+        aceQty = Mathf.Min(aceQty, maxDice);
+        toAces = new Bid(aceQty, 1);
+    }
 
-                // Convert to aces
-                if (currentBid.value != 1)
-                {
-                    int aceQty = Mathf.CeilToInt(currentBid.quantity / 2f) + 1; // align with player rule (one above half)
-                    aceQty = Mathf.Min(aceQty, maxDice);
-                    possible.Add(new Bid(aceQty, 1));
-                }
+    Bid fromAces = null;
+    if (currentBid.value == 1)
+    {
+        int nonAceQty = currentBid.quantity * 2 + 1;
+        nonAceQty = Mathf.Min(nonAceQty, maxDice);
+        fromAces = new Bid(nonAceQty, UnityEngine.Random.Range(2, 7));
+    }
 
-                // Convert from aces
-                if (currentBid.value == 1)
-                {
-                    int nonAceQty = currentBid.quantity * 2 + 1;
-                    nonAceQty = Mathf.Min(nonAceQty, maxDice); // respect table max (exception handled in rules)
-                    possible.Add(new Bid(nonAceQty, UnityEngine.Random.Range(2, 7)));
-                }
-            }
+    Bid[] preferenceOrder;
+    if (UnityEngine.Random.value < raiseQuantityBias)
+        preferenceOrder = new Bid[] { qtyRaise, faceRaise, toAces, fromAces };
+    else
+        preferenceOrder = new Bid[] { faceRaise, qtyRaise, toAces, fromAces };
 
-            // Return first valid candidate
-            foreach (Bid b in possible)
-            {
-                var val = DudoRules.IsValidBid(currentBid, b, maxDice);
-                if (val.valid) return b;
-            }
+    foreach (var b in preferenceOrder)
+    {
+        if (b == null) continue;
+        var v = DudoRules.IsValidBid(currentBid, b, maxDice);
+        if (v.valid) return b;
+    }
 
-            return null;
-        }
+    return null;
+}
+
 
         private int GetTotalDiceInPlay()
         {
