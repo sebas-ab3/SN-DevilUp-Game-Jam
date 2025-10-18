@@ -8,7 +8,7 @@ namespace DudoGame
     public class Bid
     {
         public int quantity;
-        public int value; // 1=Aces, 2-6=normal faces
+        public int value; // 1=Aces, 2–6=normal faces
 
         public Bid(int q, int v)
         {
@@ -23,7 +23,7 @@ namespace DudoGame
 
         public override string ToString()
         {
-            string valueName = value == 1 ? "Aces" : value.ToString();
+            string valueName = (value == 1) ? "Aces" : value.ToString();
             return $"{quantity} {valueName}";
         }
     }
@@ -50,9 +50,7 @@ namespace DudoGame
         {
             dice.Clear();
             for (int i = 0; i < diceCount; i++)
-            {
                 dice.Add(UnityEngine.Random.Range(1, 7));
-            }
         }
 
         public void LoseDie()
@@ -75,15 +73,12 @@ namespace DudoGame
             foreach (Player player in players)
             {
                 if (player.eliminated) continue;
-
                 foreach (int die in player.dice)
                 {
-                    // If checking for aces, only count aces
                     if (value == 1)
                     {
                         if (die == 1) count++;
                     }
-                    // If checking for non-aces, count that value + aces (wild)
                     else
                     {
                         if (die == value || die == 1) count++;
@@ -93,37 +88,45 @@ namespace DudoGame
             return count;
         }
 
-        // Validate if a bid is legal based on previous bid
-        public static (bool valid, string reason) IsValidBid(Bid currentBid, Bid newBid)
+        // Validation with table maximum (totalDiceInPlay) awareness
+        public static (bool valid, string reason) IsValidBid(Bid currentBid, Bid newBid, int totalDiceInPlay = -1)
         {
             if (!newBid.IsValid())
-            {
                 return (false, "Invalid bid values");
-            }
+
+            // Absolute cap: cannot exceed the total dice in play
+            if (totalDiceInPlay > 0 && newBid.quantity > totalDiceInPlay)
+                return (false, $"Cannot bid more than the table maximum of {totalDiceInPlay}");
 
             // First bid cannot be aces
             if (currentBid == null)
             {
                 if (newBid.value == 1)
-                {
                     return (false, "First bid cannot be Aces");
-                }
                 return (true, "");
             }
 
             int prevQty = currentBid.quantity;
             int prevVal = currentBid.value;
-            int newQty = newBid.quantity;
-            int newVal = newBid.value;
+            int newQty  = newBid.quantity;
+            int newVal  = newBid.value;
+
+            // If quantity is already at the table max, the only legal raise is a higher face (same qty)
+            if (totalDiceInPlay > 0 && prevQty >= totalDiceInPlay)
+            {
+                if (newQty != prevQty)
+                    return (false, $"Quantity is already at the table maximum ({totalDiceInPlay}); you must increase the face value");
+                if (newVal <= prevVal)
+                    return (false, $"Must increase face value above {prevVal}");
+                return (true, "");
+            }
 
             // Converting TO aces from non-aces
             if (newVal == 1 && prevVal != 1)
             {
-                int minAces = Mathf.CeilToInt(prevQty / 2f);
+                int minAces = Mathf.CeilToInt(prevQty / 2f) + 1; // one above half
                 if (newQty < minAces)
-                {
-                    return (false, $"Must bid at least {minAces} Aces (half of {prevQty} rounded up)");
-                }
+                    return (false, $"Must bid at least {minAces} Aces (one above half of {prevQty})");
                 return (true, "");
             }
 
@@ -133,35 +136,35 @@ namespace DudoGame
                 int minQty = prevQty * 2 + 1;
                 if (newQty < minQty)
                 {
-                    return (false, $"Must bid at least {minQty} (double {prevQty} plus 1)");
+                    // Exception: allow exactly the table maximum even if below 2x+1
+                    if (totalDiceInPlay > 0 && newQty == totalDiceInPlay)
+                        return (true, "");
+                    return (false, $"Must bid at least {minQty} (double {prevQty} plus 1), or use the table maximum of {totalDiceInPlay}");
                 }
                 return (true, "");
             }
 
-            // Both same type (both aces or both non-aces)
+            // Same face (aces->aces or same non-ace face): quantity must strictly increase
             if (newVal == prevVal)
             {
                 if (newQty <= prevQty)
-                {
                     return (false, $"Must increase quantity above {prevQty}");
-                }
                 return (true, "");
             }
 
             // Both non-aces, different values
             if (newVal != 1 && prevVal != 1)
             {
-                // Higher quantity is always valid
-                if (newQty > prevQty)
-                {
-                    return (true, "");
-                }
-                // Same quantity but higher value
-                if (newQty == prevQty && newVal > prevVal)
-                {
-                    return (true, "");
-                }
-                return (false, "Must increase quantity or value");
+                if (newQty > prevQty) return (true, "");              // raising quantity OK
+                if (newQty == prevQty && newVal > prevVal) return (true, ""); // same qty, higher face OK
+
+                if (newQty == prevQty && newVal <= prevVal)
+                    return (false, $"Must increase face value above {prevVal}");
+
+                if (newQty < prevQty && newVal > prevVal)
+                    return (false, $"Cannot decrease quantity below {prevQty} when increasing face value");
+
+                return (false, $"Must increase quantity above {prevQty} or (with same quantity) increase face value above {prevVal}");
             }
 
             return (false, "Invalid bid");
@@ -179,10 +182,11 @@ namespace DudoGame
 
         public DudoGameManager(string playerName, int startingDice = 5)
         {
-            players = new List<Player>();
-            players.Add(new Player(playerName, startingDice, false)); // Human player
-            players.Add(new Player("AI", startingDice, true));         // AI opponent
-            
+            players = new List<Player>
+            {
+                new Player(playerName, startingDice, false),
+                new Player("AI", startingDice, true)
+            };
             gameLog = new List<string>();
             currentPlayerIndex = 0;
             roundActive = false;
@@ -194,14 +198,8 @@ namespace DudoGame
             lastBidderIndex = -1;
             roundActive = true;
 
-            // Roll dice for all non-eliminated players
             foreach (Player player in players)
-            {
-                if (!player.eliminated)
-                {
-                    player.RollDice();
-                }
-            }
+                if (!player.eliminated) player.RollDice();
 
             AddLog($"New round started. {players[currentPlayerIndex].playerName} goes first.");
         }
@@ -223,23 +221,14 @@ namespace DudoGame
             int bidder = lastBidderIndex;
             int caller = currentPlayerIndex;
 
-            string valueName = currentBid.value == 1 ? "Aces" : currentBid.value.ToString();
+            string valueName = (currentBid.value == 1) ? "Aces" : currentBid.value.ToString();
             AddLog($"{players[caller].playerName} calls! Checking...");
             AddLog($"Actual count: {actual} {valueName}");
 
-            int loser;
-            if (actual >= currentBid.quantity)
-            {
-                // Bid was correct, caller loses
-                loser = caller;
-                AddLog($"Bid was correct! {players[caller].playerName} loses a die!");
-            }
-            else
-            {
-                // Bid was wrong, bidder loses
-                loser = bidder;
-                AddLog($"Bid was wrong! {players[bidder].playerName} loses a die!");
-            }
+            int loser = (actual >= currentBid.quantity) ? caller : bidder;
+            AddLog((actual >= currentBid.quantity)
+                ? $"Bid was correct! {players[caller].playerName} loses a die!"
+                : $"Bid was wrong! {players[bidder].playerName} loses a die!");
 
             players[loser].LoseDie();
             currentPlayerIndex = loser; // Loser starts next round
@@ -253,41 +242,33 @@ namespace DudoGame
             int actual = DudoRules.CountDice(players, currentBid.value);
             int caller = currentPlayerIndex;
 
-            string valueName = currentBid.value == 1 ? "Aces" : currentBid.value.ToString();
+            string valueName = (currentBid.value == 1) ? "Aces" : currentBid.value.ToString();
             AddLog($"{players[caller].playerName} calls Spot On! Checking...");
             AddLog($"Actual count: {actual} {valueName}");
 
             if (actual == currentBid.quantity)
             {
-                // Spot on was correct - no one loses, declarer starts
                 AddLog("Spot On! No one loses dice.");
-                currentPlayerIndex = lastBidderIndex;
+                currentPlayerIndex = lastBidderIndex; // declarer starts
             }
             else
             {
-                // Spot on was wrong - caller loses
                 AddLog($"Wrong! {players[caller].playerName} loses a die!");
                 players[caller].LoseDie();
-                currentPlayerIndex = caller; // Caller starts next round
+                currentPlayerIndex = caller; // caller starts next
             }
         }
 
         public bool IsGameOver()
         {
-            int activePlayers = 0;
-            foreach (Player p in players)
-            {
-                if (!p.eliminated) activePlayers++;
-            }
-            return activePlayers <= 1;
+            int active = 0;
+            foreach (Player p in players) if (!p.eliminated) active++;
+            return active <= 1;
         }
 
         public Player GetWinner()
         {
-            foreach (Player p in players)
-            {
-                if (!p.eliminated) return p;
-            }
+            foreach (Player p in players) if (!p.eliminated) return p;
             return null;
         }
 
@@ -308,85 +289,89 @@ namespace DudoGame
         // AI Decision Making
         public (string action, Bid bid) GetAIDecision()
         {
+            int maxDice = GetTotalDiceInPlay();
             float decision = UnityEngine.Random.value;
+
+            // If we are already at (qty == maxDice, face == 6), AI must call to avoid infinite loop
+            if (currentBid != null && currentBid.quantity >= maxDice && currentBid.value >= 6)
+                return ("call", null);
 
             if (currentBid == null)
             {
-                // Make initial bid (cannot be aces)
-                int quantity = UnityEngine.Random.Range(1, 4);
+                // initial bid (non-aces), cap quantity to maxDice
+                int quantity = Mathf.Clamp(UnityEngine.Random.Range(1, 4), 1, Mathf.Max(1, maxDice));
                 int value = UnityEngine.Random.Range(2, 7);
                 return ("raise", new Bid(quantity, value));
             }
 
             // Small chance to call or spot on
-            if (decision < 0.15f)
+            if (decision < 0.15f)      return ("call", null);
+            else if (decision < 0.25f) return ("spoton", null);
+
+            // Try to raise, respecting maxDice and the "must raise face when qty==maxDice" rule
+            Bid newBid = GenerateAIBid(maxDice);
+            if (newBid != null) return ("raise", newBid);
+
+            // If can't raise, call instead
+            return ("call", null);
+        }
+
+        private Bid GenerateAIBid(int maxDice)
+        {
+            if (currentBid == null)
+                return new Bid(Mathf.Clamp(UnityEngine.Random.Range(1, 4), 1, Mathf.Max(1, maxDice)),
+                               UnityEngine.Random.Range(2, 7));
+
+            var possible = new List<Bid>();
+
+            // If quantity already at maxDice: only face+1 (same qty) is legal
+            if (currentBid.quantity >= maxDice)
             {
-                return ("call", null);
-            }
-            else if (decision < 0.25f)
-            {
-                return ("spoton", null);
+                if (currentBid.value < 6)
+                    possible.Add(new Bid(currentBid.quantity, currentBid.value + 1));
             }
             else
             {
-                // Try to raise
-                Bid newBid = GenerateAIBid();
-                if (newBid != null)
+                // Increase quantity (same face) if it won't exceed maxDice
+                if (currentBid.quantity + 1 <= maxDice)
+                    possible.Add(new Bid(currentBid.quantity + 1, currentBid.value));
+
+                // Increase face (same qty)
+                if (currentBid.value < 6)
+                    possible.Add(new Bid(currentBid.quantity, currentBid.value + 1));
+
+                // Convert to aces
+                if (currentBid.value != 1)
                 {
-                    return ("raise", newBid);
+                    int aceQty = Mathf.CeilToInt(currentBid.quantity / 2f) + 1; // align with player rule (one above half)
+                    aceQty = Mathf.Min(aceQty, maxDice);
+                    possible.Add(new Bid(aceQty, 1));
                 }
-                else
+
+                // Convert from aces
+                if (currentBid.value == 1)
                 {
-                    // If can't raise, call instead
-                    return ("call", null);
+                    int nonAceQty = currentBid.quantity * 2 + 1;
+                    nonAceQty = Mathf.Min(nonAceQty, maxDice); // respect table max (exception handled in rules)
+                    possible.Add(new Bid(nonAceQty, UnityEngine.Random.Range(2, 7)));
                 }
             }
-        }
 
-        private Bid GenerateAIBid()
-        {
-            if (currentBid == null)
+            // Return first valid candidate
+            foreach (Bid b in possible)
             {
-                return new Bid(UnityEngine.Random.Range(1, 4), UnityEngine.Random.Range(2, 7));
-            }
-
-            // Try different bid strategies
-            List<Bid> possibleBids = new List<Bid>();
-
-            // Try increasing quantity
-            possibleBids.Add(new Bid(currentBid.quantity + 1, currentBid.value));
-
-            // Try increasing value (same quantity)
-            if (currentBid.value < 6)
-            {
-                possibleBids.Add(new Bid(currentBid.quantity, currentBid.value + 1));
-            }
-
-            // Try converting to aces
-            if (currentBid.value != 1)
-            {
-                int aceQty = Mathf.CeilToInt(currentBid.quantity / 2f);
-                possibleBids.Add(new Bid(aceQty, 1));
-            }
-
-            // Try converting from aces
-            if (currentBid.value == 1)
-            {
-                int nonAceQty = currentBid.quantity * 2 + 1;
-                possibleBids.Add(new Bid(nonAceQty, UnityEngine.Random.Range(2, 7)));
-            }
-
-            // Find first valid bid
-            foreach (Bid bid in possibleBids)
-            {
-                var validation = DudoRules.IsValidBid(currentBid, bid);
-                if (validation.valid)
-                {
-                    return bid;
-                }
+                var val = DudoRules.IsValidBid(currentBid, b, maxDice);
+                if (val.valid) return b;
             }
 
             return null;
+        }
+
+        private int GetTotalDiceInPlay()
+        {
+            int total = 0;
+            foreach (var p in players) if (!p.eliminated) total += p.diceCount;
+            return total;
         }
     }
 }
