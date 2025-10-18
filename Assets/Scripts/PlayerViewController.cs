@@ -12,6 +12,10 @@ public class PlayerViewController : MonoBehaviour
     [SerializeField] private Transform anchorZoom;
     [SerializeField] private GameObject minigameRoot;
 
+    [Header("Dudo Monitor Display")]
+    [SerializeField] private Camera dudoUICamera;     // Camera that renders UI to monitor
+    [SerializeField] private Canvas dudoCanvas;       // Your main Dudo overlay canvas
+
     [Header("FOV")]
     [SerializeField] private float normalFOV = 60f;
     [SerializeField] private float zoomFOV = 40f;
@@ -63,6 +67,9 @@ public class PlayerViewController : MonoBehaviour
                 mainCamera.transform.SetPositionAndRotation(targetAnchor.position, targetAnchor.rotation);
                 mainCamera.fieldOfView = targetFOV;
             }
+            // In zoom mode - show fullscreen overlay, disable monitor camera
+            if (dudoCanvas) dudoCanvas.enabled = true;
+            if (dudoUICamera) dudoUICamera.enabled = false;
         }
         else
         {
@@ -75,7 +82,10 @@ public class PlayerViewController : MonoBehaviour
                 mainCamera.transform.SetPositionAndRotation(targetAnchor.position, targetAnchor.rotation);
                 mainCamera.fieldOfView = targetFOV;
             }
-            if (minigameRoot) minigameRoot.SetActive(false); // only turn off if we weren't already zoomed
+            if (minigameRoot) minigameRoot.SetActive(false);
+            // In 3D world - hide fullscreen overlay, enable monitor camera
+            if (dudoCanvas) dudoCanvas.enabled = false;
+            if (dudoUICamera) dudoUICamera.enabled = true;
         }
 
         Cursor.lockState = CursorLockMode.None;
@@ -140,6 +150,20 @@ public class PlayerViewController : MonoBehaviour
 
         if (minigameRoot) minigameRoot.SetActive(v == View.Zoom);
 
+        // Toggle between fullscreen UI and monitor display
+        if (v == View.Zoom)
+        {
+            // Entering minigame - show fullscreen overlay
+            if (dudoCanvas) dudoCanvas.enabled = true;
+            if (dudoUICamera) dudoUICamera.enabled = false; // Stop rendering to monitor
+        }
+        else
+        {
+            // Exiting to 3D world - show on monitor
+            if (dudoCanvas) dudoCanvas.enabled = false;
+            if (dudoUICamera) dudoUICamera.enabled = true; // Render to monitor
+        }
+
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
 
@@ -172,5 +196,17 @@ public class PlayerViewController : MonoBehaviour
             mainCamera.fieldOfView = targetFOV;
         }
         if (minigameRoot) minigameRoot.SetActive(showMinigame);
+
+        // Handle UI display based on view
+        if (v == View.Zoom)
+        {
+            if (dudoCanvas) dudoCanvas.enabled = true;
+            if (dudoUICamera) dudoUICamera.enabled = false;
+        }
+        else
+        {
+            if (dudoCanvas) dudoCanvas.enabled = false;
+            if (dudoUICamera) dudoUICamera.enabled = true;
+        }
     }
 }
